@@ -18,7 +18,7 @@ sonatypeProfileName := "com.thesamet"
 
 inThisBuild(
   List(
-    organization := "com.thesamet.scalapb.zio-grpc",
+    organization := "com.thesamet.scalapb.grpc-web",
     homepage := Some(url("https://github.com/scalameta/sbt-scalafmt")),
     licenses := List(
       "Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
@@ -34,21 +34,7 @@ inThisBuild(
   )
 )
 
-val zioVersion = "1.0.0-RC18-2"
 
-lazy val core = project
-  .in(file("core"))
-  .settings(stdSettings)
-  .settings(
-    name := "zio-grpc-core",
-    libraryDependencies ++= Seq(
-      "dev.zio" %% "zio" % zioVersion,
-      "dev.zio" %% "zio-streams" % zioVersion,
-      "io.grpc" % "grpc-services" % grpcVersion,
-      "dev.zio" %% "zio-test" % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
-    )
-  )
 
 lazy val codeGen = project
   .in(file("code-gen"))
@@ -56,8 +42,8 @@ lazy val codeGen = project
   .settings(stdSettings)
   .settings(
     buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion),
-    buildInfoPackage := "scalapb.zio_grpc",
-    name := "zio-grpc-codegen",
+    buildInfoPackage := "scalapb.grpc-web",
+    name := "grpc-web-codegen",
     libraryDependencies ++= Seq(
       "com.thesamet.scalapb" %% "compilerplugin" % scalapb.compiler.Version.scalapbVersion
     )
@@ -76,55 +62,29 @@ def projDef(name: String, shebang: Boolean) =
         )
       ),
       skip in publish := true,
-      Compile / mainClass := Some("scalapb.zio_grpc.ZioCodeGenerator")
+      Compile / mainClass := Some("scalapb.grpc_web.GrpcWebWithMetadataCodeGenerator")
     )
 
-lazy val protocGenZioUnix = projDef("protoc-gen-zio-unix", shebang = true)
+lazy val protocGenWebUnix = projDef("protoc-gen-web-unix", shebang = true)
 
-lazy val protocGenZioWindows =
-  projDef("protoc-gen-zio-windows", shebang = false)
+lazy val protocGenWebWindows =
+  projDef("protoc-gen-web-windows", shebang = false)
 
-lazy val protocGenZio = project
+lazy val protocGenWeb = project
   .settings(
     crossScalaVersions := List(Scala213),
-    name := "protoc-gen-zio",
+    name := "protoc-gen-web",
     publishArtifact in (Compile, packageDoc) := false,
     publishArtifact in (Compile, packageSrc) := false,
     crossPaths := false,
     addArtifact(
-      Artifact("protoc-gen-zio", "jar", "sh", "unix"),
-      assembly in (protocGenZioUnix, Compile)
+      Artifact("protoc-gen-web", "jar", "sh", "unix"),
+      assembly in (protocGenWebUnix, Compile)
     ),
     addArtifact(
-      Artifact("protoc-gen-zio", "jar", "bat", "windows"),
-      assembly in (protocGenZioWindows, Compile)
+      Artifact("protoc-gen-web", "jar", "bat", "windows"),
+      assembly in (protocGenWebWindows, Compile)
     ),
     autoScalaLibrary := false
   )
 
-lazy val e2e = project
-  .in(file("e2e"))
-  .dependsOn(core)
-  .settings(stdSettings)
-  .settings(
-    skip in publish := true,
-    libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-test" % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test",
-      "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalapb.compiler.Version.scalapbVersion,
-      "io.grpc" % "grpc-netty" % grpcVersion
-    ),
-    Compile / PB.generate := ((Compile / PB.generate) dependsOn (protocGenZioUnix / Compile / assembly)).value,
-    PB.targets in Compile := Seq(
-      scalapb.gen(grpc = true) -> (sourceManaged in Compile).value,
-      (
-        PB.gens.plugin(
-          "zio",
-          (protocGenZioUnix / assembly / target).value / "protoc-gen-zio-unix-assembly-" + version.value + ".jar"
-        ),
-        Seq()
-      ) -> (Compile / sourceManaged).value
-    ),
-    Compile / PB.recompile := true, // always regenerate protos, not cache
-    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
-  )

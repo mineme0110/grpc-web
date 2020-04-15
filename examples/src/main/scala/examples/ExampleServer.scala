@@ -1,74 +1,67 @@
 package examples
 
-import examples.greeter.ZioGreeter.Greeter
+
+
+import java.net.InetAddress
+import java.util.logging.Logger
 import examples.greeter._
-import zio.clock
-import zio.clock.Clock
-import zio.console.Console
-import zio.{App, Schedule, IO, ZIO}
-import zio.console
-import zio.duration._
-import zio.stream.Stream
-import io.grpc.ServerBuilder
-import zio.blocking._
-import zio.console._
-import io.grpc.Status
-import zio.Managed
-import zio.stream.ZSink
-import scalapb.zio_grpc.Server
-import zio.Layer
-import zio.ZLayer
-import zio.Has
-import zio.ZManaged
+import io.grpc.stub.StreamObserver
+import io.grpc.{Server, ServerBuilder}
+import scala.concurrent.{ExecutionContext, Future}
 
-object GreeterService {
-  type GreeterService = Has[Greeter]
 
-  class LiveService(clock: Clock.Service) extends Greeter {
-    def greet(req: Request): IO[Status, Response] =
-      clock.sleep(300.millis) *> zio.IO.succeed(
-        Response(resp = "hello " + req.name)
-      )
+object ExampleServer {
+  private val logger = Logger.getLogger(classOf[ExampleServer].getName)
 
-    def points(
-        request: Request
-    ): Stream[Status, Point] =
-      (Stream(Point(3, 4))
-        .scheduleElements(Schedule.spaced(1000.millis))
-        .forever
-        .take(5) ++
-        Stream.fail(
-          Status.INTERNAL
-            .withDescription("There was an error!")
-            .withCause(new RuntimeException)
-        )).provide(Has(clock))
+  def main(args: Array[String]): Unit = {
+    val server = new ExampleServer(ExecutionContext.global)
+    server.start()
+    server.blockUntilShutdown()
+  }
 
-    def bidi(
-        request: Stream[Status, Point]
-    ): Stream[Status, Response] = {
-      val sink = ZSink.collectAllN[Point](3)
-      request.aggregate(sink.map(r => Response(r.toString())))
+  private val port = 50051
+}
+
+class ExampleServer(executionContext: ExecutionContext) { self =>
+  private[this] var server: Server = null
+
+  private def start(): Unit = {
+    server = ServerBuilder.forPort(ExampleServer.port).asInstanceOf[ServerBuilder[_ <: ServerBuilder[_]]]
+      .addService(GreeterGrpc.bindService(new GreeterImpl, executionContext))
+      .build.start
+    ExampleServer.logger.info("Server started, listening on " + ExampleServer.port + s", Server: ${InetAddress.getLocalHost}")
+    Runtime.getRuntime.addShutdownHook(new Thread() {
+      override def run(): Unit = {
+        System.err.println("*** shutting down gRPC server since JVM is shutting down")
+        self.stop()
+        System.err.println("*** server shut down")
+      }
+    })
+  }
+
+  private def stop(): Unit = {
+    if (server != null) {
+      server.shutdown()
     }
   }
 
-  val live: ZLayer[Clock, Nothing, GreeterService] =
-    ZLayer.fromService(new LiveService(_))
+  private def blockUntilShutdown(): Unit = {
+    if (server != null) {
+      server.awaitTermination()
+    }
+  }
+
+  private class GreeterImpl extends GreeterGrpc.Greeter {
+    override def greet(request: Request): Future[Response] = {
+        val reply = Response(request.name + " Client")
+        ExampleServer.logger.info(s"Receive Req: `${request.toString}`, from server: ${InetAddress.getLocalHost.getHostAddress}")
+        Future.successful(reply)
+  }
+
+    override def points(request: Request, responseObserver: StreamObserver[Point]): Unit = ???
+
+    override def bidi(responseObserver: StreamObserver[Response]): StreamObserver[Point] = ???
+  }
+
 }
 
-object ExampleServer extends App {
-  def serverWait: ZIO[Console with Clock, Throwable, Unit] =
-    for {
-      _ <- putStrLn("Server is running. Press Ctrl-C to stop.")
-      _ <- (putStr(".") *> ZIO.sleep(1.second)).forever
-    } yield ()
-
-  def serverLive(port: Int): Layer[Nothing, Server] =
-    Clock.live >>> GreeterService.live >>> Server.live[Greeter](
-      ServerBuilder.forPort(port)
-    )
-
-  def run(args: List[String]) = myAppLogic.fold(_ => 1, _ => 0)
-
-  val myAppLogic =
-    serverWait.provideLayer(serverLive(8080) ++ Console.live ++ Clock.live)
-}
